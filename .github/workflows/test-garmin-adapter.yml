@@ -1,0 +1,63 @@
+name: Test Garmin Adapter
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Garmin adapter pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/garmin_adapter
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/garmin_adapter/requirements.txt
+
+      - name: Verify Python
+        run: python --version
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Run adapter tests
+        run: python -m pytest -q
+
+  api-test:
+    name: Garmin API pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/garmin_api
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/garmin_api/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Run API tests
+        run: PYTHONPATH=../garmin_adapter python -m pytest -q
