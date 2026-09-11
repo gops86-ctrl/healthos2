@@ -395,4 +395,3 @@ createServer(async (req, res) => {
     `HealthOS MCP server listening on port ${PORT}`
   );
 });
-```
