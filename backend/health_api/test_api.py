@@ -5,13 +5,15 @@ from health_api import main
 client = TestClient(main.app)
 
 
-def test_health_without_storage() -> None:
+def test_health_without_storage(monkeypatch) -> None:
+    monkeypatch.setattr(main, "mfp_configured", lambda: False)
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
         "storage": "unconfigured",
         "hevy": "unconfigured",
+        "myfitnesspal": "unconfigured",
     }
 
 
@@ -87,3 +89,43 @@ def test_metric_history_preserves_all_records_and_filters_by_range(monkeypatch) 
     response = client.get("/health/metrics", params={"metric_type": "VO2_MAX"})
     assert response.status_code == 200
     assert response.json() == [metrics[3]]
+
+
+def test_mfp_nutrition_endpoint(monkeypatch) -> None:
+    records = [
+        {
+            "calories": 723.0,
+            "proteinGrams": 56.0,
+            "carbohydrateGrams": 45.0,
+            "fatGrams": 37.0,
+            "meal": "Dinner",
+            "recordedAtMillis": 1000,
+            "source": "MYFITNESSPAL",
+            "sourceRecordId": "mfp-test-1",
+            "foodName": "paneer butter masala, 1 serving",
+        }
+    ]
+    monkeypatch.setattr(main, "fetch_recent_nutrition", lambda days: records if days == 7 else [])
+
+    response = client.get("/health/mfp/nutrition", params={"days": 7})
+    assert response.status_code == 200
+    assert response.json() == {
+        "source": "MYFITNESSPAL",
+        "days": 7,
+        "count": 1,
+        "nutrition": records,
+    }
+
+
+def test_mfp_nutrition_rejects_invalid_window(monkeypatch) -> None:
+    called = False
+
+    def fail_if_called(days):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(main, "fetch_recent_nutrition", fail_if_called)
+    response = client.get("/health/mfp/nutrition", params={"days": 14})
+    assert response.status_code == 400
+    assert called is False
