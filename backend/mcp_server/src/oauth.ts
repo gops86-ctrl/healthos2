@@ -20,10 +20,6 @@ const pendingGoogle = new Map<string, PendingGoogle>();
 const authorizationCodes = new Map<string, AuthorizationCode>();
 const refreshTokens = new Map<string, RefreshToken>();
 
-if (!GOOGLE_CLIENT_ID) throw new Error('GOOGLE_CLIENT_ID is required');
-if (!GOOGLE_CLIENT_SECRET) throw new Error('GOOGLE_CLIENT_SECRET is required');
-if (!SIGNING_SECRET) throw new Error('MCP_OAUTH_SIGNING_SECRET or MCP_API_KEY is required');
-
 function randomId(bytes = 32) { return randomBytes(bytes).toString('base64url'); }
 function b64(value: Buffer) { return value.toString('base64url'); }
 function safeEqual(a: string, b: string) {
@@ -36,6 +32,7 @@ function createToken(payload: Record<string, unknown>) {
   return `${body}.${sign(body)}`;
 }
 function verifyToken(token: string): Record<string, unknown> | null {
+  if (!SIGNING_SECRET) return null;
   const [body, signature] = token.split('.');
   if (!body || !signature || !safeEqual(signature, sign(body))) return null;
   try {
@@ -107,6 +104,7 @@ export async function handleOAuthRequest(req: IncomingMessage, res: ServerRespon
   }
 
   if (req.method === 'POST' && url.pathname === '/oauth/register') {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !SIGNING_SECRET) { json(res, 503, { error: 'temporarily_unavailable', error_description: 'OAuth is not configured' }); return true; }
     let input: Record<string, unknown>;
     try { input = JSON.parse(await readBody(req)) as Record<string, unknown>; } catch { json(res, 400, { error: 'invalid_client_metadata' }); return true; }
     const redirectUris = Array.isArray(input.redirect_uris) ? input.redirect_uris.filter((x): x is string => typeof x === 'string') : [];
@@ -118,6 +116,7 @@ export async function handleOAuthRequest(req: IncomingMessage, res: ServerRespon
   }
 
   if (req.method === 'GET' && url.pathname === '/oauth/authorize') {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !SIGNING_SECRET) { json(res, 503, { error: 'temporarily_unavailable', error_description: 'OAuth is not configured' }); return true; }
     const clientId = url.searchParams.get('client_id') ?? '';
     const redirectUri = url.searchParams.get('redirect_uri') ?? '';
     const codeChallenge = url.searchParams.get('code_challenge') ?? '';
@@ -143,6 +142,7 @@ export async function handleOAuthRequest(req: IncomingMessage, res: ServerRespon
   }
 
   if (req.method === 'GET' && url.pathname === '/oauth/google/callback') {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !SIGNING_SECRET) { json(res, 503, { error: 'temporarily_unavailable', error_description: 'OAuth is not configured' }); return true; }
     const stateId = url.searchParams.get('state') ?? '';
     const pending = pendingGoogle.get(stateId);
     pendingGoogle.delete(stateId);
@@ -175,6 +175,7 @@ export async function handleOAuthRequest(req: IncomingMessage, res: ServerRespon
   }
 
   if (req.method === 'POST' && url.pathname === '/oauth/token') {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !SIGNING_SECRET) { json(res, 503, { error: 'temporarily_unavailable', error_description: 'OAuth is not configured' }); return true; }
     const body = new URLSearchParams(await readBody(req));
     const grantType = body.get('grant_type');
     if (grantType === 'refresh_token') {
