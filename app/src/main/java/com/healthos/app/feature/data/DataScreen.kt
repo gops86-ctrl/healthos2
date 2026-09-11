@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.healthos.app.data.source.hevy.HevySyncImporter
+import com.healthos.app.data.source.myfitnesspal.MyFitnessPalSyncImporter
 import com.healthos.app.domain.model.LabResult
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -32,12 +33,17 @@ private enum class HevySyncRange(val label: String, val key: String) {
     DAYS_7("7D", "7D"), DAYS_30("30D", "30D")
 }
 
+private enum class MfpSyncRange(val label: String, val days: Int) {
+    DAYS_7("7D", 7), DAYS_30("30D", 30)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DataScreen(
     viewModel: DataViewModel,
     onGarminSync: suspend (String, (Int, String) -> Unit) -> Int,
-    onHevySync: suspend (String, (Int, String) -> Unit) -> HevySyncImporter.Result
+    onHevySync: suspend (String, (Int, String) -> Unit) -> HevySyncImporter.Result,
+    onMyFitnessPalSync: suspend (String, (Int, String) -> Unit) -> MyFitnessPalSyncImporter.Result
 ) {
     val stravaViewModel: StravaImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val stravaState by stravaViewModel.state.collectAsState()
@@ -64,6 +70,12 @@ fun DataScreen(
     var labNameError by remember { mutableStateOf(false) }
     var labValueError by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var mfpSyncing by remember { mutableStateOf(false) }
+    var mfpSyncMessage by remember { mutableStateOf<String?>(null) }
+    var mfpSyncError by remember { mutableStateOf(false) }
+    var mfpSyncProgress by remember { mutableStateOf(0) }
+    var mfpSyncStage by remember { mutableStateOf("Ready to sync MyFitnessPal") }
+    var selectedMfpRange by remember { mutableStateOf(MfpSyncRange.DAYS_7) }
 
     fun resetLabForm() {
         labName = ""; labValue = ""; labUnit = ""; labReference = ""
@@ -100,11 +112,20 @@ fun DataScreen(
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Restaurant, null); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("MyFitnessPal", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Nutrition history import", color = MaterialTheme.colorScheme.onSurfaceVariant) }; if (mfpState.imported > 0) Icon(Icons.Default.CheckCircle, "MyFitnessPal imported") }
-                Text("Import the MyFitnessPal Nutrition Summary CSV. HealthOS stores meal-level calories, macros and available micronutrients locally, then aggregates them by day in Nutrition.", fontSize = 14.sp)
-                Button(onClick = { mfpPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv", "application/octet-stream")) }, enabled = !mfpState.importing, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text(if (mfpState.importing) "Importing…" else "Import MyFitnessPal CSV") }
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Restaurant, null); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("MyFitnessPal", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Nutrition history import & live sync", color = MaterialTheme.colorScheme.onSurfaceVariant) }; if (mfpState.imported > 0 || mfpSyncMessage?.contains("complete", ignoreCase = true) == true) Icon(Icons.Default.CheckCircle, "MyFitnessPal synced") }
+                Text("Import the MyFitnessPal Nutrition Summary CSV for archive history, or sync recent nutrition directly from MyFitnessPal. Live sync replaces existing MyFitnessPal entries for the synced dates so CSV and live data are not double-counted.", fontSize = 14.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { mfpPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv", "application/octet-stream")) }, enabled = !mfpState.importing && !mfpSyncing, modifier = Modifier.weight(1f)) { Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text(if (mfpState.importing) "Importing…" else "Import CSV") }
+                    Button(onClick = { scope.launch { mfpSyncing = true; mfpSyncError = false; mfpSyncProgress = 0; mfpSyncStage = "Starting MyFitnessPal sync…"; mfpSyncMessage = null; try { val result = onMyFitnessPalSync(selectedMfpRange.days.toString()) { progress, stage -> mfpSyncProgress = progress.coerceIn(0, 100); mfpSyncStage = stage }; mfpSyncProgress = 100; if (result.error != null) { mfpSyncError = true; mfpSyncStage = "MyFitnessPal sync failed"; mfpSyncMessage = result.error } else { mfpSyncStage = "MyFitnessPal sync complete"; mfpSyncMessage = "${result.imported} nutrition entries synced${if (result.skipped > 0) "; ${result.skipped} skipped" else ""}." } } catch (error: Throwable) { mfpSyncError = true; mfpSyncStage = "MyFitnessPal sync failed"; mfpSyncMessage = error.message?.takeIf { it.isNotBlank() } ?: "MyFitnessPal sync failed." } finally { mfpSyncing = false } } }, enabled = !mfpState.importing && !mfpSyncing, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Sync, null); Spacer(Modifier.width(8.dp)); Text(if (mfpSyncing) "Syncing…" else "Sync MFP") }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Live window", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    MfpSyncRange.values().forEach { range -> FilterChip(selected = selectedMfpRange == range, onClick = { if (!mfpSyncing) selectedMfpRange = range }, label = { Text(range.label) }) }
+                }
                 if (mfpState.importing || mfpState.progress > 0) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(mfpState.stage ?: "Importing…", fontSize = 13.sp); Text("${mfpState.progress}%", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }; LinearProgressIndicator(progress = { mfpState.progress / 100f }, modifier = Modifier.fillMaxWidth()); if (mfpState.total > 0) Text("${mfpState.processed} / ${mfpState.total}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (mfpSyncing || mfpSyncProgress > 0) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(mfpSyncStage, fontSize = 13.sp, color = if (mfpSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant); Text("${mfpSyncProgress}%", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }; LinearProgressIndicator(progress = { mfpSyncProgress / 100f }, modifier = Modifier.fillMaxWidth()) }
                 mfpState.message?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                mfpSyncMessage?.let { Text(it, fontSize = 13.sp, color = if (mfpSyncError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
             }
         }
 
