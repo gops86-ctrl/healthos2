@@ -30,7 +30,7 @@ import com.healthos.app.data.local.ProfilePreferences
 import com.healthos.app.domain.model.ActivityType
 import com.healthos.app.domain.model.MetricType
 import com.healthos.app.domain.repository.HealthRepository
-import com.healthos.app.feature.data.DataScreenWithHevy
+import com.healthos.app.feature.data.DataScreen
 import com.healthos.app.feature.fitness.*
 import com.healthos.app.feature.health.HealthScreen
 import com.healthos.app.feature.health.LabDetailScreen
@@ -85,7 +85,7 @@ fun HealthOSNavHost(repository: HealthRepository, onGarminSync: suspend (String,
             composable(LAB_ROUTE) { entry -> entry.arguments?.getString("id")?.toLongOrNull()?.let { id -> labResults.firstOrNull { it.id == id }?.let { result -> LabDetailScreen(result, { nav.popBackStack() }, { name, value, unit, ref, date -> repository.updateLabResult(id, name, value, unit, ref, date) }, { repository.deleteLabResult(id) }) } } }
             composable("nutrition") { NutritionScreen(metrics, nutritionEntries, { nav.navigate("metric/${it.type.name}") }, { nav.navigate("nutrition/$it") }) }
             composable(NUTRITION_DAY_ROUTE) { entry -> entry.arguments?.getString("date")?.toLongOrNull()?.let { date -> NutritionDetailScreen(date, nutritionEntries, { nav.popBackStack() }, onDeleteNutritionDay) } }
-            composable("data") { val vm = viewModel<com.healthos.app.feature.data.DataViewModel>(factory = factory); DataScreenWithHevy(vm, onGarminSync, onHevySync) }
+            composable("data") { val vm = viewModel<com.healthos.app.feature.data.DataViewModel>(factory = factory); DataScreen(vm, onGarminSync, onHevySync) }
             composable(METRIC_ROUTE) { entry -> val type = entry.arguments?.getString("type")?.let { runCatching { MetricType.valueOf(it) }.getOrNull() }; val metric = metrics.firstOrNull { it.type == type }; if (metric != null && type != null) { val vm = viewModel<MetricDetailViewModel>(factory = remember(repository, type) { MetricDetailViewModelFactory(repository, type) }); MetricDetailScreen(metric, vm) { nav.popBackStack() } } }
             composable(WORKOUT_ROUTE) { entry -> entry.arguments?.getString("id")?.toLongOrNull()?.let { id -> val vm = viewModel<WorkoutDetailViewModel>(factory = remember(repository, id) { WorkoutDetailViewModelFactory(repository, id) }); WorkoutDetailScreen(vm) { nav.popBackStack() } } }
             composable(ACTIVITY_ROUTE) { entry -> entry.arguments?.getString("id")?.toLongOrNull()?.let { id -> val vm = viewModel<ActivityDetailViewModel>(factory = remember(repository, id) { ActivityDetailViewModelFactory(repository, id) }); ActivityDetailScreen(vm) { nav.popBackStack() } } }
