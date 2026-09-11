@@ -27,6 +27,9 @@ interface NutritionEntryDao {
     @Query("DELETE FROM nutrition_entries WHERE recordedAtMillis >= :startMillis AND recordedAtMillis < :endMillis")
     suspend fun deleteByDateRange(startMillis: Long, endMillis: Long)
 
+    @Query("DELETE FROM nutrition_entries WHERE source = :source AND recordedAtMillis >= :startMillis AND recordedAtMillis < :endMillis")
+    suspend fun deleteBySourceAndDateRange(source: String, startMillis: Long, endMillis: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(entries: List<NutritionEntryEntity>)
 }
