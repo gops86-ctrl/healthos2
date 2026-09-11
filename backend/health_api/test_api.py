@@ -8,7 +8,11 @@ client = TestClient(main.app)
 def test_health_without_storage() -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "storage": "unconfigured"}
+    assert response.json() == {
+        "status": "ok",
+        "storage": "unconfigured",
+        "hevy": "unconfigured",
+    }
 
 
 def test_snapshot_contract(monkeypatch) -> None:
