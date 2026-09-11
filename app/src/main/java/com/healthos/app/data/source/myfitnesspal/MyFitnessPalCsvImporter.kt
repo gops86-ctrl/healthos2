@@ -69,7 +69,6 @@ class MyFitnessPalCsvImporter(
                 onProgress(Progress((offset + 1) * 100 / (lines.size - 1), offset + 1, lines.size - 1, "Importing MyFitnessPal nutrition…"))
             }
             if (rows.isEmpty()) return@withContext Result(0, skipped, "No valid nutrition rows found.")
-            nutritionEntryDao.deleteBySource(DataSource.MYFITNESSPAL.name)
             nutritionEntryDao.insertAll(rows)
             Result(rows.size, skipped)
         } catch (e: Exception) {
