@@ -32,7 +32,10 @@ def _timestamp(value: Any) -> float | None:
 
 
 def _headers(access_token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {access_token}", "x-api-key": WEB_API_KEY, "Accept": "application/json"}
+    headers = {"x-api-key": WEB_API_KEY, "Accept": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    return headers
 
 
 def _redis() -> Redis | None:
@@ -47,7 +50,9 @@ def _load_tokens() -> dict[str, Any]:
         value = redis.get(TOKEN_KEY)
         if value:
             try:
-                return json.loads(str(value))
+                parsed = json.loads(str(value))
+                if isinstance(parsed, dict):
+                    return parsed
             except json.JSONDecodeError:
                 pass
     return {
@@ -63,16 +68,11 @@ def _save_tokens(tokens: dict[str, Any]) -> None:
         redis.set(TOKEN_KEY, json.dumps(tokens, separators=(",", ":")))
 
 
-def _get_access_token(client: httpx.Client) -> str:
-    tokens = _load_tokens()
+def _refresh_access_token(client: httpx.Client, tokens: dict[str, Any]) -> str:
     access = str(tokens.get("access_token", "")).strip()
     refresh = str(tokens.get("refresh_token", "")).strip()
-    expiry = _timestamp(tokens.get("expires_at"))
-    needs_refresh = not access or (expiry is not None and expiry <= datetime.now(timezone.utc).timestamp() + 60)
-    if not needs_refresh:
-        return access
     if not refresh:
-        raise RuntimeError("Hevy access token is not configured")
+        raise RuntimeError("Hevy refresh token is not configured")
 
     response = client.post(
         f"{BASE_URL}/auth/refresh_token",
@@ -85,6 +85,7 @@ def _get_access_token(client: httpx.Client) -> str:
     new_refresh = str(refreshed.get("refresh_token", refresh)).strip()
     if not new_access:
         raise RuntimeError("Hevy token refresh returned no access token")
+
     updated = {
         "access_token": new_access,
         "refresh_token": new_refresh,
@@ -92,6 +93,33 @@ def _get_access_token(client: httpx.Client) -> str:
     }
     _save_tokens(updated)
     return new_access
+
+
+def _get_access_token(client: httpx.Client) -> str:
+    tokens = _load_tokens()
+    access = str(tokens.get("access_token", "")).strip()
+    refresh = str(tokens.get("refresh_token", "")).strip()
+    expiry = _timestamp(tokens.get("expires_at"))
+    needs_refresh = not access or (expiry is not None and expiry <= datetime.now(timezone.utc).timestamp() + 60)
+    if not needs_refresh:
+        return access
+    return _refresh_access_token(client, tokens)
+
+
+def _get_with_refresh(client: httpx.Client, url: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+    tokens = _load_tokens()
+    access = str(tokens.get("access_token", "")).strip()
+    if not access:
+        access = _get_access_token(client)
+
+    response = client.get(url, params=params, headers=_headers(access))
+    if response.status_code != 401:
+        return response
+
+    # Access tokens may expire without an expiry value being persisted.
+    # Refresh once, persist the rotated credentials, then retry the request.
+    new_access = _refresh_access_token(client, tokens)
+    return client.get(url, params=params, headers=_headers(new_access))
 
 
 def configured() -> bool:
@@ -110,6 +138,9 @@ def fetch_recent_workouts(days: int) -> list[dict[str, Any]]:
         headers = _headers(access_token)
         if not username:
             account = client.get(f"{BASE_URL}/account", headers=headers)
+            if account.status_code == 401:
+                access_token = _refresh_access_token(client, _load_tokens())
+                account = client.get(f"{BASE_URL}/account", headers=_headers(access_token))
             account.raise_for_status()
             username = str(account.json().get("username", "")).strip()
         if not username:
@@ -118,7 +149,11 @@ def fetch_recent_workouts(days: int) -> list[dict[str, Any]]:
         workouts: list[dict[str, Any]] = []
         offset = 0
         while True:
-            response = client.get(f"{BASE_URL}/user_workouts_paged", params={"username": username, "limit": 10, "offset": offset}, headers=headers)
+            response = _get_with_refresh(
+                client,
+                f"{BASE_URL}/user_workouts_paged",
+                params={"username": username, "limit": 10, "offset": offset},
+            )
             response.raise_for_status()
             payload = response.json()
             page = payload.get("workouts", []) if isinstance(payload, dict) else []
