@@ -58,7 +58,7 @@ fun ManualWeightDialog(
                 val value = weight.trim().toDoubleOrNull()
                 weightError = value == null || value <= 0.0 || value > 500.0
                 if (!weightError) {
-                    viewModel.saveBodyMeasurement(com.healthos.app.domain.model.BodyMeasurementType.WEIGHT, value!!, "kg", recordedAtMillis)
+                    viewModel.saveBodyMeasurement(com.healthos.app.domain.model.BodyMeasurementType.WEIGHT, weight, "kg", recordedAtMillis)
                     onDismiss()
                 }
             }) { Text("Save weight") }
