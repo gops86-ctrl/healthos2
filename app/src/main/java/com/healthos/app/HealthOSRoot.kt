@@ -16,6 +16,8 @@ import com.healthos.app.data.source.hevy.HevySyncClient
 import com.healthos.app.data.source.hevy.HevySyncImporter
 import com.healthos.app.data.source.healthify.HealthifyWeightCsvImporter
 import com.healthos.app.data.source.myfitnesspal.MyFitnessPalCsvImporter
+import com.healthos.app.data.source.myfitnesspal.MyFitnessPalSyncClient
+import com.healthos.app.data.source.myfitnesspal.MyFitnessPalSyncImporter
 import com.healthos.app.domain.model.DataSource
 import com.healthos.app.domain.model.HealthMetric
 import com.healthos.app.domain.model.MetricType
@@ -158,7 +160,27 @@ fun HealthOSRoot() {
         result
     }
 
-    HealthOSNavHost(repository = repository, onGarminSync = syncGarmin, onHevySync = syncHevy, onDeleteNutritionDay = { date ->
+    val syncMyFitnessPal: suspend (String, (Int, String) -> Unit) -> MyFitnessPalSyncImporter.Result = { range, onProgress ->
+        val days = when (range) { "30D" -> 30 else -> 7 }
+        val importer = MyFitnessPalSyncImporter(
+            MyFitnessPalSyncClient(BuildConfig.HEALTHOS_API_BASE_URL, BuildConfig.HEALTHOS_API_KEY),
+            database.nutritionEntryDao()
+        )
+        val result = importer.sync(days) { progress -> onProgress(progress.percent, progress.stage) }
+        if (result.error == null) {
+            HealthApiClient(BuildConfig.HEALTHOS_API_BASE_URL, BuildConfig.HEALTHOS_API_KEY).uploadSnapshot(
+                metrics = database.healthMetricDao().observeAllHistory().first().map { it.toDomain() },
+                activities = repository.observeActivities().first(),
+                workouts = repository.observeWorkouts().first(),
+                nutrition = repository.observeNutritionEntries().first(),
+                bodyMeasurements = repository.observeBodyMeasurements().first(),
+                labs = repository.observeLabResults().first()
+            ).onFailure { error -> android.util.Log.w("HealthOS", "Post-MyFitnessPal canonical snapshot upload failed", error) }
+        }
+        result
+    }
+
+    HealthOSNavHost(repository = repository, onGarminSync = syncGarmin, onHevySync = syncHevy, onMyFitnessPalSync = syncMyFitnessPal, onDeleteNutritionDay = { date ->
         val start = Calendar.getInstance().apply { timeInMillis = date; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }
         val end = (start.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
         database.nutritionEntryDao().deleteByDateRange(start.timeInMillis, end.timeInMillis)
