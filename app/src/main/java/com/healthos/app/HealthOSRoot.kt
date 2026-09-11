@@ -161,7 +161,7 @@ fun HealthOSRoot() {
     }
 
     val syncMyFitnessPal: suspend (String, (Int, String) -> Unit) -> MyFitnessPalSyncImporter.Result = { range, onProgress ->
-        val days = when (range) { "30D" -> 30 else -> 7 }
+        val days = when (range) { "30D", "30" -> 30 else -> 7 }
         val importer = MyFitnessPalSyncImporter(
             MyFitnessPalSyncClient(BuildConfig.HEALTHOS_API_BASE_URL, BuildConfig.HEALTHOS_API_KEY),
             database.nutritionEntryDao()
@@ -218,10 +218,10 @@ private fun activityCategory(activity: ActivityEntity): String {
 }
 
 private fun inferOtherCategory(name: String): String = when {
-    name.contains("swim") || name.contains("pool") -> "SWIM"
-    name.contains("run") || name.contains("walk") || name.contains("treadmill") -> "LOCOMOTION"
-    name.contains("ride") || name.contains("cycling") || name.contains("bike") -> "RIDE"
-    name.contains("hike") || name.contains("trek") -> "HIKE"
-    name.contains("strength") || name.contains("workout") || name.contains("weight") -> "STRENGTH"
-    else -> "UNKNOWN"
+    name.contains("basket") || name.contains("court") -> "BASKETBALL"
+    name.contains("football") -> "SOCCER"
+    name.contains("tennis") -> "TENNIS"
+    name.contains("badminton") -> "BADMINTON"
+    name.contains("elliptical") || name.contains("cross") -> "ELLIPTICAL"
+    else -> "OTHER"
 }
