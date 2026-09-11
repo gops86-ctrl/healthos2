@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from myfitnesspal_mcp import auth, mfp_client
@@ -75,8 +75,6 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
         try:
             mfp_day = client.get_date(day)
         except Exception as exc:
-            # A single inaccessible day should not discard successfully fetched
-            # days from the same sync window.
             raise RuntimeError(f"MyFitnessPal diary fetch failed for {day}: {exc}") from exc
 
         entry_index = 0
@@ -85,6 +83,7 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
             for entry in meal.entries:
                 totals = entry.totals
                 name = str(entry.name).strip()
+                recorded_at = int(datetime.combine(day, time.min, tzinfo=timezone.utc).timestamp() * 1000)
                 records.append(
                     {
                         "calories": _macro_value(totals, "calories"),
@@ -101,9 +100,7 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
                         "potassiumMg": _macro_value(totals, "potassium", "potass."),
                         "fiberGrams": _macro_value(totals, "fiber"),
                         "sugarGrams": _macro_value(totals, "sugar"),
-                        "recordedAtMillis": int(day.strftime("%s")) * 1000 if os.name != "nt" else int(
-                            __import__("datetime").datetime.combine(day, __import__("datetime").time()).timestamp() * 1000
-                        ),
+                        "recordedAtMillis": recorded_at,
                         "source": "MYFITNESSPAL",
                         "sourceRecordId": _source_record_id(day, meal_name, name, entry_index),
                         "foodName": name,
