@@ -31,10 +31,40 @@ def _local_saved_cookies() -> dict[str, str] | None:
     return None
 
 
+def _bootstrap_cookies() -> dict[str, str] | None:
+    try:
+        cookies = auth.load_cookies()
+    except Exception:
+        return None
+    if not cookies:
+        return None
+    return {str(key): str(value) for key, value in cookies.items()}
+
+
 def _cookie_candidates() -> list[dict[str, str]]:
-    """Return persistent, local, and bootstrap sessions without exposing them."""
+    """Return persistent, local, and bootstrap sessions without exposing them.
+
+    If the Render MFP_COOKIE was replaced, prefer that newly configured
+    bootstrap session over a stale Redis/local session. Otherwise keep the
+    persisted refreshed session first so automatic refresh remains durable.
+    """
+    persistent = load_mfp_session()
+    local = _local_saved_cookies()
+    bootstrap = _bootstrap_cookies()
+
     candidates: list[dict[str, str]] = []
-    for cookies in (load_mfp_session(), _local_saved_cookies(), auth.load_cookies()):
+    sources = (persistent, local, bootstrap)
+    if bootstrap:
+        bootstrap_session = bootstrap.get(auth.SESSION_COOKIE)
+        persisted_sessions = {
+            cookies.get(auth.SESSION_COOKIE)
+            for cookies in (persistent, local)
+            if cookies and cookies.get(auth.SESSION_COOKIE)
+        }
+        if bootstrap_session and bootstrap_session not in persisted_sessions:
+            sources = (bootstrap, persistent, local)
+
+    for cookies in sources:
         if not cookies:
             continue
         normalized = {str(key): str(value) for key, value in cookies.items()}
@@ -106,9 +136,6 @@ def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         try:
-            # Use an HTTPS URL instead of a domain-only cookie. This lets
-            # Chromium derive the host/secure constraints itself and avoids
-            # Storage.setCookies rejecting otherwise valid __Secure cookies.
             context.add_cookies(
                 [
                     {
@@ -190,8 +217,6 @@ def _best_effort_session_touch(
     try:
         _refresh_client(cookies, username, impersonate)
     except Exception:
-        # A successful diary sync is still useful. Refresh is an optimization
-        # for extending the next session window, not a reason to fail the sync.
         pass
 
 
@@ -272,7 +297,5 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
                 )
                 entry_index += 1
 
-    # Keep a still-valid session warm after a successful sync. If MFP has
-    # already invalidated it, don't turn a successful data sync into a failure.
     _best_effort_session_touch(active_cookies, username, impersonate)
     return records
