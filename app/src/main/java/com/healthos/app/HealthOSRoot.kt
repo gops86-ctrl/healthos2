@@ -56,6 +56,7 @@ fun HealthOSRoot() {
 
     LaunchedEffect(repository) {
         repository.seedIfEmpty()
+        cleanupGarminStravaDuplicates(database)
         merge(
             database.healthMetricDao().observeAllHistory().map { Unit },
             repository.observeActivities().map { Unit },
@@ -96,6 +97,7 @@ fun HealthOSRoot() {
             else { database.activityDao().insertAll(listOf(activity)); imported++ }
             onProgress(70 + ((index + 1) * 30 / candidates.size.coerceAtLeast(1)), "Checking activities ${index + 1} / ${candidates.size}…")
         }
+        cleanupGarminStravaDuplicates(database)
         imported
     }
 
@@ -128,7 +130,10 @@ fun HealthOSRoot() {
             chunkStart = chunkEnd.plusDays(1)
         }
         if (range == "7D" || range == "30D") syncGarminActivities(range) { progress, stage -> onProgress(70 + (progress * 30 / 100), stage) }
-        else onProgress(100, "Garmin sync complete")
+        else {
+            cleanupGarminStravaDuplicates(database)
+            onProgress(100, "Garmin sync complete")
+        }
         HealthApiClient(BuildConfig.HEALTHOS_API_BASE_URL, BuildConfig.HEALTHOS_API_KEY).uploadSnapshot(
             metrics = database.healthMetricDao().observeAllHistory().first().map { it.toDomain() },
             activities = repository.observeActivities().first(),
@@ -185,6 +190,18 @@ fun HealthOSRoot() {
         val end = (start.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
         database.nutritionEntryDao().deleteByDateRange(start.timeInMillis, end.timeInMillis)
     })
+}
+
+private suspend fun cleanupGarminStravaDuplicates(database: HealthOSDatabase) {
+    val activities = database.activityDao().getAll()
+    val strava = activities.filter { it.source.equals("STRAVA", ignoreCase = true) }
+    val garmin = activities.filter { it.source.equals("GARMIN", ignoreCase = true) }
+    if (strava.isEmpty() || garmin.isEmpty()) return
+
+    garmin.forEach { garminActivity ->
+        val duplicate = strava.any { stravaActivity -> isLikelySameActivity(stravaActivity, garminActivity) }
+        if (duplicate) database.activityDao().deleteById(garminActivity.id)
+    }
 }
 
 private fun HealthMetricEntity.toDomain(): HealthMetric = HealthMetric(type = MetricType.valueOf(metricType), value = value, delta = delta, source = DataSource.valueOf(source), recordedAtMillis = recordedAtMillis, importedAtMillis = importedAtMillis, sourceRecordId = sourceRecordId)
