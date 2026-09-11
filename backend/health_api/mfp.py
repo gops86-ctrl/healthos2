@@ -87,8 +87,10 @@ def _refresh_client(
         if "executable doesn't exist" not in message and "browser" not in message:
             raise
         _install_browser()
-        if not refresh.profile_seeded():
-            refresh.seed_profile(seed_cookies)
+        # A failed first seed still creates the browser-profile directory, so
+        # seed explicitly after installing Chromium instead of relying on the
+        # directory-exists check.
+        refresh.seed_profile(seed_cookies)
         refresh.refresh_session()
 
     cookies = _load_cookies() or seed_cookies
