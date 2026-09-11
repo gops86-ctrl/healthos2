@@ -14,6 +14,8 @@ from health_api.storage import load_mfp_session, save_mfp_session
 
 DEFAULT_IMPERSONATE = "chrome"
 _REFRESH_LOCK = threading.Lock()
+MFP_URL = "https://www.myfitnesspal.com/"
+SETTLE_MS = 4000
 
 
 def _local_saved_cookies() -> dict[str, str] | None:
@@ -75,37 +77,79 @@ def _source_record_id(day: date, meal: str | None, name: str, index: int) -> str
     return f"mfp-{day.isoformat()}-{digest}"
 
 
+def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
+    """Visit MFP with a candidate session and harvest any rotated cookies.
+
+    Mason's refresh helper uses the same Playwright flow, but Render needs
+    Chromium launched with container-safe flags. Keeping the browser visit
+    here also lets us report the real launch failure instead of mislabelling
+    every browser exception as a missing Chromium installation.
+    """
+    if not refresh.available():
+        raise RuntimeError("MyFitnessPal automatic refresh is unavailable")
+
+    from playwright.sync_api import sync_playwright
+
+    profile_dir = refresh.profile_dir()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as pw:
+        context = pw.chromium.launch_persistent_context(
+            str(profile_dir),
+            headless=True,
+            chromium_sandbox=False,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        try:
+            context.add_cookies(
+                [
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": ".myfitnesspal.com",
+                        "path": "/",
+                        "secure": True,
+                    }
+                    for name, value in seed_cookies.items()
+                ]
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(MFP_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(SETTLE_MS)
+            harvested: dict[str, str] = {}
+            for cookie in context.cookies(MFP_URL):
+                harvested[cookie["name"]] = cookie["value"]
+            return harvested
+        finally:
+            context.close()
+
+
 def _refresh_client(
     seed_cookies: dict[str, str],
     username: str | None,
     impersonate: str,
 ) -> mfp_client.CurlCffiClient:
     """Refresh MFP using the preinstalled Playwright browser and persist the result."""
-    if not refresh.available():
-        raise RuntimeError("MyFitnessPal automatic refresh is unavailable")
-
     with _REFRESH_LOCK:
         try:
-            # Always reseed from the current candidate. This matters after a
-            # Render restart when Redis may contain a stale session but the
-            # bootstrap MFP_COOKIE is newer.
-            refresh.seed_profile(seed_cookies)
-            refresh.refresh_session()
+            cookies = _browser_refresh(seed_cookies)
         except Exception as exc:
-            message = str(exc).lower()
-            if "executable doesn't exist" in message or "browser" in message:
+            message = str(exc)
+            if "Executable doesn't exist" in message or "executable doesn't exist" in message:
                 raise RuntimeError(
                     "MyFitnessPal automatic refresh needs Chromium installed during the Render build"
                 ) from exc
-            raise
+            raise RuntimeError(f"MyFitnessPal browser refresh failed: {message}") from exc
 
-        cookies = _local_saved_cookies()
-        if not cookies:
+        if auth.SESSION_COOKIE not in cookies:
             raise RuntimeError(
-                "MyFitnessPal session refresh could not persist a usable browser session; "
+                "MyFitnessPal session refresh did not produce a usable session cookie; "
                 "the current MFP session may be fully expired and require re-authentication"
             )
+
+        auth.save_cookies(cookies)
         save_mfp_session(cookies)
+        mfp_client.reset()
         return mfp_client.build_client(cookies, username=username, impersonate=impersonate)
 
 
