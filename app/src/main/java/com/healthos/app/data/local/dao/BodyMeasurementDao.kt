@@ -15,6 +15,9 @@ interface BodyMeasurementDao {
     @Query("SELECT * FROM body_measurements WHERE measurementType = :type ORDER BY recordedAtMillis DESC LIMIT 1")
     suspend fun findLatestByType(type: String): BodyMeasurementEntity?
 
+    @Query("SELECT * FROM body_measurements WHERE measurementType = :type AND source != :excludedSource ORDER BY recordedAtMillis DESC LIMIT 1")
+    suspend fun findLatestByTypeExcludingSource(type: String, excludedSource: String): BodyMeasurementEntity?
+
     @Query("DELETE FROM body_measurements WHERE id = :id")
     suspend fun deleteById(id: Long)
 
