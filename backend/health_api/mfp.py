@@ -78,17 +78,22 @@ def _source_record_id(day: date, meal: str | None, name: str, index: int) -> str
 
 
 def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
-    """Visit MFP with a candidate session and harvest any rotated cookies.
+    """Visit MFP with the session cookie and harvest rotated cookies.
 
-    Mason's refresh helper uses the same Playwright flow, but Render needs
-    Chromium launched with container-safe flags. Keeping the browser visit
-    here also lets us report the real launch failure instead of mislabelling
-    every browser exception as a missing Chromium installation.
+    We intentionally seed only MFP's authenticated session cookie. A copied
+    browser Cookie header can contain auxiliary cookies with attributes or
+    names that Chromium rejects through Storage.setCookies; those cookies are
+    not required to establish the NextAuth session and can make the refresh
+    fail before the page is even visited.
     """
     if not refresh.available():
         raise RuntimeError("MyFitnessPal automatic refresh is unavailable")
 
     from playwright.sync_api import sync_playwright
+
+    session_value = seed_cookies.get(auth.SESSION_COOKIE)
+    if not session_value:
+        raise RuntimeError("MyFitnessPal session cookie is missing from the configured session")
 
     profile_dir = refresh.profile_dir()
     profile_dir.mkdir(parents=True, exist_ok=True)
@@ -101,16 +106,16 @@ def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         try:
+            # Use an HTTPS URL instead of a domain-only cookie. This lets
+            # Chromium derive the host/secure constraints itself and avoids
+            # Storage.setCookies rejecting otherwise valid __Secure cookies.
             context.add_cookies(
                 [
                     {
-                        "name": name,
-                        "value": value,
-                        "domain": ".myfitnesspal.com",
-                        "path": "/",
-                        "secure": True,
+                        "name": auth.SESSION_COOKIE,
+                        "value": session_value,
+                        "url": MFP_URL,
                     }
-                    for name, value in seed_cookies.items()
                 ]
             )
             page = context.pages[0] if context.pages else context.new_page()
