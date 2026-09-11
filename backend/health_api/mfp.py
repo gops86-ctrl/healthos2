@@ -101,7 +101,10 @@ def _refresh_client(
 
         cookies = _local_saved_cookies()
         if not cookies:
-            raise RuntimeError("MyFitnessPal refresh completed but no refreshed session cookie was saved")
+            raise RuntimeError(
+                "MyFitnessPal session refresh could not persist a usable browser session; "
+                "the current MFP session may be fully expired and require re-authentication"
+            )
         save_mfp_session(cookies)
         return mfp_client.build_client(cookies, username=username, impersonate=impersonate)
 
@@ -131,13 +134,32 @@ def _client() -> mfp_client.CurlCffiClient:
     )
 
 
+def _best_effort_session_touch(
+    cookies: dict[str, str], username: str | None, impersonate: str
+) -> None:
+    """Refresh a still-valid browser session without making sync depend on it."""
+    try:
+        _refresh_client(cookies, username, impersonate)
+    except Exception:
+        # A successful diary sync is still useful. Refresh is an optimization
+        # for extending the next session window, not a reason to fail the sync.
+        pass
+
+
 def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
     if days not in (7, 30):
         raise ValueError("days must be 7 or 30")
 
     today = date.today()
     start = today - timedelta(days=days - 1)
+    candidates = _cookie_candidates()
+    if not candidates:
+        raise RuntimeError("MyFitnessPal is not configured; set MFP_COOKIE and retry")
+
+    username = os.getenv("MFP_USERNAME", "").strip() or auth.saved_username()
+    impersonate = os.getenv("MFP_IMPERSONATE", DEFAULT_IMPERSONATE).strip() or DEFAULT_IMPERSONATE
     client = _client()
+    active_cookies = candidates[0]
     records: list[dict[str, Any]] = []
     refreshed = False
 
@@ -153,11 +175,10 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
                 candidates = _cookie_candidates()
                 if not candidates:
                     raise RuntimeError("MyFitnessPal is not configured; set MFP_COOKIE and retry")
-                username = os.getenv("MFP_USERNAME", "").strip() or auth.saved_username()
-                impersonate = os.getenv("MFP_IMPERSONATE", DEFAULT_IMPERSONATE).strip() or DEFAULT_IMPERSONATE
                 for cookies in candidates:
                     try:
                         client = _refresh_client(cookies, username, impersonate)
+                        active_cookies = cookies
                         mfp_day = client.get_date(day)
                         refreshed = True
                         break
@@ -202,4 +223,7 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
                 )
                 entry_index += 1
 
+    # Keep a still-valid session warm after a successful sync. If MFP has
+    # already invalidated it, don't turn a successful data sync into a failure.
+    _best_effort_session_touch(active_cookies, username, impersonate)
     return records
