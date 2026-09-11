@@ -1,0 +1,96 @@
+name: Cleanup old Actions storage
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/cleanup-actions.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old workflow runs and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Finding workflow runs, newest first..."
+          mapfile -t RUNS < <(gh api --paginate \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${REPO}/actions/runs?per_page=100" \
+            --jq '.workflow_runs[] | [.id, .run_number, .created_at, .status] | @tsv' \
+            | sort -t $'\t' -k3,3r)
+
+          # Never delete this cleanup run while it is executing.
+          mapfile -t RUNS < <(printf '%s\n' "${RUNS[@]}" | awk -F '\t' -v current="$CURRENT_RUN_ID" '$1 != current')
+
+          if (( ${#RUNS[@]} == 0 )); then
+            echo "No previous workflow runs exist. Nothing to delete."
+            exit 0
+          fi
+
+          # Preserve the newest run that existed before this cleanup run.
+          KEEP_RUN_ID="$(printf '%s\n' "${RUNS[0]}" | cut -f1)"
+          echo "Preserving newest previous workflow run: ${KEEP_RUN_ID}"
+
+          for ROW in "${RUNS[@]:1}"; do
+            RUN_ID="$(printf '%s\n' "$ROW" | cut -f1)"
+            RUN_NUMBER="$(printf '%s\n' "$ROW" | cut -f2)"
+            STATUS="$(printf '%s\n' "$ROW" | cut -f4)"
+            echo "Cleaning run ${RUN_ID} (#${RUN_NUMBER}, ${STATUS})..."
+
+            if [[ "$STATUS" == "queued" || "$STATUS" == "in_progress" || "$STATUS" == "waiting" || "$STATUS" == "requested" || "$STATUS" == "pending" ]]; then
+              echo "Cancelling run ${RUN_ID} first..."
+              gh api --method POST \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/${REPO}/actions/runs/${RUN_ID}/cancel" || true
+
+              # Wait until GitHub has actually transitioned the run out of an
+              # active state. A cancelled run may briefly remain undeletable.
+              for wait in {1..20}; do
+                STATUS="$(gh api \
+                  -H 'Accept: application/vnd.github+json' \
+                  "/repos/${REPO}/actions/runs/${RUN_ID}" \
+                  --jq '.status' 2>/dev/null || echo "completed")"
+                if [[ "$STATUS" != "queued" && "$STATUS" != "in_progress" && "$STATUS" != "waiting" && "$STATUS" != "requested" && "$STATUS" != "pending" ]]; then
+                  break
+                fi
+                sleep 3
+              done
+            fi
+
+            mapfile -t ARTIFACT_IDS < <(gh api --paginate \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+              --jq '.artifacts[].id')
+
+            for ARTIFACT_ID in "${ARTIFACT_IDS[@]}"; do
+              gh api --method DELETE \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/${REPO}/actions/artifacts/${ARTIFACT_ID}"
+            done
+
+            for attempt in 1 2 3 4 5; do
+              if gh api --method DELETE \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/${REPO}/actions/runs/${RUN_ID}"; then
+                break
+              fi
+              if (( attempt == 5 )); then
+                echo "Could not delete run ${RUN_ID} after retries" >&2
+                exit 1
+              fi
+              sleep 3
+            done
+          done
+
+          echo "Cleanup complete. Newest previous run ${KEEP_RUN_ID} was preserved."
