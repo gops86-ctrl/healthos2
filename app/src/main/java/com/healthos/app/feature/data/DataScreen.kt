@@ -18,21 +18,27 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.healthos.app.data.source.hevy.HevySyncImporter
 import com.healthos.app.domain.model.LabResult
 import kotlinx.coroutines.launch
 import java.text.DateFormat
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.util.Date
 
 private enum class GarminRange(val label: String, val key: String) {
     DAYS_7("7D", "7D"), DAYS_30("30D", "30D"), MONTHS_3("3M", "3M"), YEAR_1("1Y", "1Y"), ALL("All", "ALL")
 }
 
+private enum class HevySyncRange(val label: String, val key: String) {
+    DAYS_7("7D", "7D"), DAYS_30("30D", "30D")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, String) -> Unit) -> Int) {
+fun DataScreen(
+    viewModel: DataViewModel,
+    onGarminSync: suspend (String, (Int, String) -> Unit) -> Int,
+    onHevySync: suspend (String, (Int, String) -> Unit) -> HevySyncImporter.Result
+) {
     val stravaViewModel: StravaImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val stravaState by stravaViewModel.state.collectAsState()
     val hevyState by viewModel.hevyState.collectAsState()
@@ -47,6 +53,8 @@ fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, St
     var garminProgress by remember { mutableStateOf(0) }
     var garminStage by remember { mutableStateOf("Preparing Garmin sync…") }
     var selectedGarminRange by remember { mutableStateOf(GarminRange.DAYS_7) }
+    var showHevySync by remember { mutableStateOf(false) }
+    var showManualWeight by remember { mutableStateOf(false) }
     var showLabDialog by remember { mutableStateOf(false) }
     var labName by remember { mutableStateOf("") }
     var labValue by remember { mutableStateOf("") }
@@ -112,6 +120,14 @@ fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, St
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.MonitorWeight, null); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Manual Weight", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Log a weight reading", color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                Text("Log your weight directly when you do not have a HealthifyMe reading. The entry is stored as a manual body measurement and feeds the internal body-composition estimate.", fontSize = 14.sp)
+                Button(onClick = { showManualWeight = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(8.dp)); Text("Log weight") }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Strava", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("History import", color = MaterialTheme.colorScheme.onSurfaceVariant) }; if (stravaState.total > 0) Icon(Icons.Default.CheckCircle, "Strava imported") }
                 Text("Request your personal Strava archive, then select the ZIP here. HealthOS processes the archive locally and stores your activity history.", fontSize = 14.sp)
                 OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.strava.com/"))) }, modifier = Modifier.fillMaxWidth()) { Text("Open Strava website") }
@@ -125,7 +141,8 @@ fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, St
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.FitnessCenter, null); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Hevy", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Strength workout import", color = MaterialTheme.colorScheme.onSurfaceVariant) }; if (hevyState.imported > 0) Icon(Icons.Default.CheckCircle, "Hevy imported") }
-                Text("Import your Hevy workout_data.csv. Strength workouts, exercises and sets are stored locally in HealthOS.", fontSize = 14.sp)
+                Text("Sync recent Hevy workouts from your connected account, or import your workout_data.csv archive. Strength workouts, exercises and sets are stored locally in HealthOS.", fontSize = 14.sp)
+                Button(onClick = { showHevySync = true }, enabled = true, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Sync, null); Spacer(Modifier.width(8.dp)); Text("Sync Hevy") }
                 Button(onClick = { hevyPicker.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv", "application/octet-stream")) }, enabled = !hevyState.importing, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text(if (hevyState.importing) "Importing…" else "Import Hevy CSV") }
                 if (hevyState.importing || hevyState.progress > 0) { LinearProgressIndicator(progress = { hevyState.progress / 100f }, modifier = Modifier.fillMaxWidth()); hevyState.stage?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
                 hevyState.message?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -133,6 +150,13 @@ fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, St
         }
         Text("HealthifyMe estimates are clearly labeled and are based on your historical Smart Scale readings; they are not HealthifyMe's proprietary BIA calculation.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("On Strava, open Settings → My Account → Download your account → Get Started, then request the archive. The ZIP can be imported here.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+
+    if (showHevySync) {
+        HevySyncDialog(onDismiss = { showHevySync = false }, onSync = onHevySync)
+    }
+    if (showManualWeight) {
+        ManualWeightDialog(viewModel = viewModel, onDismiss = { showManualWeight = false })
     }
 
     if (showLabDialog) {
@@ -163,6 +187,51 @@ fun DataScreen(viewModel: DataViewModel, onGarminSync: suspend (String, (Int, St
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = labDateMillis)
         DatePickerDialog(onDismissRequest = { showDatePicker = false }, confirmButton = { TextButton(onClick = { pickerState.selectedDateMillis?.let { labDateMillis = it }; showDatePicker = false }) { Text("Done") } }, dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }) { DatePicker(state = pickerState) }
     }
+}
+
+@Composable
+private fun HevySyncDialog(
+    onDismiss: () -> Unit,
+    onSync: suspend (String, (Int, String) -> Unit) -> HevySyncImporter.Result
+) {
+    val scope = rememberCoroutineScope()
+    var selected by remember { mutableStateOf(HevySyncRange.DAYS_7) }
+    var syncing by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var stage by remember { mutableStateOf("Choose a sync window") }
+    var resultText by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!syncing) onDismiss() },
+        title = { Text("Sync Hevy") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Fetch recent Hevy workouts, deduplicate them against local records, then update the canonical HealthOS snapshot.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { HevySyncRange.values().forEach { range -> FilterChip(selected = selected == range, onClick = { if (!syncing) selected = range }, label = { Text(range.label) }) } }
+                if (syncing || resultText != null) {
+                    Text(stage, style = MaterialTheme.typography.bodySmall, color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
+                }
+                resultText?.let { Text(it, color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        },
+        confirmButton = {
+            Button(enabled = !syncing, onClick = {
+                scope.launch {
+                    syncing = true; error = false; progress = 0; resultText = null; stage = "Starting Hevy sync…"
+                    try {
+                        val result = onSync(selected.key) { p, s -> progress = p.coerceIn(0, 100); stage = s }
+                        progress = 100
+                        if (result.error != null) { error = true; stage = "Sync failed"; resultText = result.error }
+                        else { stage = "Sync complete"; resultText = "${result.imported} added, ${result.skipped} already present." }
+                    } catch (e: Throwable) { error = true; stage = "Sync failed"; resultText = e.message ?: "Unable to sync Hevy." }
+                    finally { syncing = false }
+                }
+            }) { Icon(Icons.Default.Sync, null); Spacer(Modifier.width(8.dp)); Text("Sync") }
+        },
+        dismissButton = { TextButton(enabled = !syncing, onClick = onDismiss) { Text("Close") } }
+    )
 }
 
 @Composable
