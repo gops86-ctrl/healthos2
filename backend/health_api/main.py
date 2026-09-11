@@ -6,6 +6,8 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from health_api.hevy import configured as hevy_configured
+from health_api.hevy import fetch_recent_workouts
 from health_api.storage import load_snapshot, save_snapshot, storage_configured
 
 app = FastAPI(title="HealthOS Data API", version="0.2.0")
@@ -56,7 +58,29 @@ def _filter_records(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "storage": "configured" if storage_configured() else "unconfigured"}
+    return {"status": "ok", "storage": "configured" if storage_configured() else "unconfigured", "hevy": "configured" if hevy_configured() else "unconfigured"}
+
+
+@app.get("/health/hevy/workouts")
+def get_hevy_workouts(
+    days: int = Query(default=7, description="Recent Hevy history window: 7 or 30 days"),
+    x_healthos_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Proxy recent Hevy workouts for the authenticated HealthOS app.
+
+    Hevy credentials remain server-side. The Android app receives normalized-source
+    candidates and performs local deduplication before writing them to Room.
+    """
+    _check_api_key(x_healthos_api_key)
+    if days not in (7, 30):
+        raise HTTPException(status_code=400, detail="days must be 7 or 30")
+    try:
+        workouts = fetch_recent_workouts(days)
+    except Exception as exc:
+        detail = str(exc).strip() or "Unable to fetch Hevy workouts"
+        status = 503 if "not configured" in detail.lower() else 502
+        raise HTTPException(status_code=status, detail=detail) from exc
+    return {"source": "HEVY", "days": days, "count": len(workouts), "workouts": workouts}
 
 
 @app.post("/health/snapshot")
