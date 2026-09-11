@@ -20,6 +20,9 @@ interface StrengthWorkoutDao {
     @Query("SELECT * FROM strength_workouts WHERE source = :source AND sourceRecordId = :sourceRecordId LIMIT 1")
     suspend fun findBySourceRecordId(source: String, sourceRecordId: String): StrengthWorkoutEntity?
 
+    @Query("SELECT * FROM strength_workouts WHERE source = :source AND LOWER(name) = LOWER(:name) AND recordedAtMillis BETWEEN :startMillis AND :endMillis LIMIT 1")
+    suspend fun findLikelyDuplicate(source: String, name: String, startMillis: Long, endMillis: Long): StrengthWorkoutEntity?
+
     @Query("SELECT COUNT(*) FROM strength_workouts")
     suspend fun count(): Int
 
