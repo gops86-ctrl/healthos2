@@ -1,18 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import subprocess
+import sys
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from myfitnesspal_mcp import auth, mfp_client
+from myfitnesspal_mcp import auth, config, mfp_client, refresh
 
 
 DEFAULT_IMPERSONATE = "chrome"
 
 
+def _load_cookies() -> dict[str, str] | None:
+    """Prefer a refreshed cookie saved during this Render instance.
+
+    MFP_COOKIE is still the bootstrap credential, but mfp-mcp's auth loader
+    gives the environment variable precedence forever. That would discard a
+    newly rotated session saved by the auto-refresh flow.
+    """
+    try:
+        path = config.cookies_path()
+        if path.exists():
+            saved = json.loads(path.read_text())
+            cookies = saved.get("cookies")
+            if cookies:
+                return cookies
+    except Exception:
+        pass
+    return auth.load_cookies()
+
+
 def configured() -> bool:
-    return bool(auth.load_cookies())
+    return bool(_load_cookies())
 
 
 def _as_float(value: Any) -> float | None:
@@ -35,16 +57,46 @@ def _macro_value(totals: Any, *keys: str) -> float | None:
 
 
 def _source_record_id(day: date, meal: str | None, name: str, index: int) -> str:
-    # python-myfitnesspal does not expose the MFP diary entry id on Entry.
-    # Keep a deterministic id so repeated 7/30-day refreshes replace the same
-    # canonical records instead of creating duplicates.
     raw = f"{day.isoformat()}|{meal or ''}|{name}|{index}".encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()[:20]
     return f"mfp-{day.isoformat()}-{digest}"
 
 
+def _install_browser() -> None:
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=True,
+        timeout=180,
+    )
+
+
+def _refresh_client(
+    seed_cookies: dict[str, str],
+    username: str | None,
+    impersonate: str,
+) -> mfp_client.CurlCffiClient:
+    if not refresh.available():
+        raise RuntimeError("MyFitnessPal session expired and automatic browser refresh is unavailable")
+
+    try:
+        if not refresh.profile_seeded():
+            refresh.seed_profile(seed_cookies)
+        refresh.refresh_session()
+    except Exception as first_error:
+        message = str(first_error).lower()
+        if "executable doesn't exist" not in message and "browser" not in message:
+            raise
+        _install_browser()
+        if not refresh.profile_seeded():
+            refresh.seed_profile(seed_cookies)
+        refresh.refresh_session()
+
+    cookies = _load_cookies() or seed_cookies
+    return mfp_client.build_client(cookies, username=username, impersonate=impersonate)
+
+
 def _client() -> mfp_client.CurlCffiClient:
-    cookies = auth.load_cookies()
+    cookies = _load_cookies()
     if not cookies:
         raise RuntimeError("MyFitnessPal is not configured; set MFP_COOKIE and retry")
 
@@ -52,13 +104,15 @@ def _client() -> mfp_client.CurlCffiClient:
     impersonate = os.getenv("MFP_IMPERSONATE", DEFAULT_IMPERSONATE).strip() or DEFAULT_IMPERSONATE
 
     try:
-        return mfp_client.build_client(
-            cookies,
-            username=username,
-            impersonate=impersonate,
-        )
+        return mfp_client.build_client(cookies, username=username, impersonate=impersonate)
     except Exception as exc:
-        raise RuntimeError(f"Unable to authenticate to MyFitnessPal: {exc}") from exc
+        try:
+            return _refresh_client(cookies, username, impersonate)
+        except Exception as refresh_error:
+            raise RuntimeError(
+                "Unable to authenticate to MyFitnessPal. The configured session cookie may have expired. "
+                "Automatic refresh also failed: " + str(refresh_error)
+            ) from exc
 
 
 def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
@@ -69,13 +123,28 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
     start = today - timedelta(days=days - 1)
     client = _client()
     records: list[dict[str, Any]] = []
+    refreshed = False
 
     for offset in range(days):
         day = start + timedelta(days=offset)
         try:
             mfp_day = client.get_date(day)
         except Exception as exc:
-            raise RuntimeError(f"MyFitnessPal diary fetch failed for {day}: {exc}") from exc
+            if refreshed:
+                raise RuntimeError(f"MyFitnessPal diary fetch failed for {day}: {exc}") from exc
+            try:
+                cookies = _load_cookies()
+                if not cookies:
+                    raise RuntimeError("MyFitnessPal is not configured; set MFP_COOKIE and retry")
+                username = os.getenv("MFP_USERNAME", "").strip() or auth.saved_username()
+                impersonate = os.getenv("MFP_IMPERSONATE", DEFAULT_IMPERSONATE).strip() or DEFAULT_IMPERSONATE
+                client = _refresh_client(cookies, username, impersonate)
+                refreshed = True
+                mfp_day = client.get_date(day)
+            except Exception as refresh_error:
+                raise RuntimeError(
+                    f"MyFitnessPal diary fetch failed for {day}; session refresh failed: {refresh_error}"
+                ) from exc
 
         entry_index = 0
         for meal in mfp_day.meals:
