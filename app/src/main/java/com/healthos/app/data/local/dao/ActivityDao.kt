@@ -12,6 +12,9 @@ interface ActivityDao {
     @Query("SELECT * FROM activities ORDER BY recordedAtMillis DESC")
     fun observeAll(): Flow<List<ActivityEntity>>
 
+    @Query("SELECT * FROM activities ORDER BY recordedAtMillis DESC")
+    suspend fun getAll(): List<ActivityEntity>
+
     @Query("SELECT * FROM activities WHERE source = :source AND activityType = :activityType AND recordedAtMillis BETWEEN :startMillis AND :endMillis ORDER BY recordedAtMillis")
     suspend fun findBySourceAndTypeBetween(source: String, activityType: String, startMillis: Long, endMillis: Long): List<ActivityEntity>
 
