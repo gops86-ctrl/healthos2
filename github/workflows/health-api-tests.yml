@@ -1,0 +1,25 @@
+name: HealthOS API tests
+
+on:
+  push:
+    paths:
+      - 'backend/health_api/**'
+      - '.github/workflows/health-api-tests.yml'
+  pull_request:
+    paths:
+      - 'backend/health_api/**'
+      - '.github/workflows/health-api-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/health_api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: PYTHONPATH=../.. pytest -q
