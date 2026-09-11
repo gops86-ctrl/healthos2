@@ -26,7 +26,8 @@ jobs:
       - name: Build debug APK
         env:
           GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
-        run: gradle assembleDebug --no-daemon -PGARMIN_API_KEY="$GARMIN_API_KEY"
+          HEALTHOS_API_KEY: ${{ secrets.GARMIN_API_KEY }}
+        run: gradle assembleDebug --no-daemon -PGARMIN_API_KEY="$GARMIN_API_KEY" -PHEALTHOS_API_BASE_URL="https://healthos-v2-api.onrender.com" -PHEALTHOS_API_KEY="$HEALTHOS_API_KEY"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
