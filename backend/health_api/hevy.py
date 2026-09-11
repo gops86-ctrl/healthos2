@@ -161,7 +161,9 @@ def fetch_recent_workouts(days: int) -> list[dict[str, Any]]:
             response = _get_with_refresh(
                 client,
                 f"{BASE_URL}/user_workouts_paged",
-                params={"username": username, "limit": 10, "offset": offset},
+                # The private web endpoint currently rejects page sizes above 5.
+                # Keep this separate from the public API's pageSize limit.
+                params={"username": username, "limit": 5, "offset": offset},
             )
             response.raise_for_status()
             payload = response.json()
@@ -179,7 +181,7 @@ def fetch_recent_workouts(days: int) -> list[dict[str, Any]]:
                     workouts.append(workout)
                 else:
                     reached_cutoff = True
-            if reached_cutoff or len(page) < 10:
+            if reached_cutoff or len(page) < 5:
                 break
             offset += len(page)
     return workouts
