@@ -1,17 +1,17 @@
 package com.healthos.app.feature.data
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -24,8 +24,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.healthos.app.data.source.hevy.HevySyncImporter
 import com.healthos.app.data.source.myfitnesspal.MyFitnessPalSyncImporter
@@ -39,14 +39,36 @@ fun DataScreenWithMyFitnessPal(
     onMyFitnessPalSync: suspend (String, (Int, String) -> Unit) -> MyFitnessPalSyncImporter.Result
 ) {
     var showSync by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize()) {
-        DataScreen(viewModel, onGarminSync, onHevySync)
-        ExtendedFloatingActionButton(
-            onClick = { showSync = true },
-            icon = { Icon(Icons.Default.Sync, contentDescription = null) },
-            text = { Text("Sync MyFitnessPal") },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)
-        )
+    Column {
+        Column(Modifier.weight(1f)) {
+            DataScreen(viewModel, onGarminSync, onHevySync)
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)
+        ) {
+            Column(
+                Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(Icons.Default.Sync, contentDescription = null)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("MyFitnessPal sync", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Fetch recent nutrition directly from MyFitnessPal",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Button(onClick = { showSync = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Sync, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sync MyFitnessPal")
+                }
+            }
+        }
     }
     if (showSync) {
         MyFitnessPalSyncDialog(
@@ -74,7 +96,10 @@ private fun MyFitnessPalSyncDialog(
         title = { Text("Sync MyFitnessPal") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Fetch recent nutrition directly from MyFitnessPal. CSV-imported nutrition remains in the local database.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Live MyFitnessPal data replaces any existing MyFitnessPal entries for the synced dates, so CSV and live data are not double-counted.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = selected == "7D", onClick = { if (!syncing) selected = "7D" }, label = { Text("7D") })
                     FilterChip(selected = selected == "30D", onClick = { if (!syncing) selected = "30D" }, label = { Text("30D") })
@@ -115,6 +140,7 @@ private fun MyFitnessPalSyncDialog(
                 }
             }) {
                 Icon(Icons.Default.Sync, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
                 Text("Sync")
             }
         },
