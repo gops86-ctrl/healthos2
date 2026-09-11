@@ -100,7 +100,16 @@ def _get_access_token(client: httpx.Client) -> str:
     access = str(tokens.get("access_token", "")).strip()
     refresh = str(tokens.get("refresh_token", "")).strip()
     expiry = _timestamp(tokens.get("expires_at"))
-    needs_refresh = not access or (expiry is not None and expiry <= datetime.now(timezone.utc).timestamp() + 60)
+
+    # If expiry is unknown, do not assume the access token is still valid.
+    # Refresh once so an old Render/Upstash session is replaced by a fresh
+    # access/refresh pair. The refreshed expiry is persisted by _save_tokens.
+    needs_refresh = (
+        not access
+        or not refresh
+        or expiry is None
+        or expiry <= datetime.now(timezone.utc).timestamp() + 60
+    )
     if not needs_refresh:
         return access
     return _refresh_access_token(client, tokens)
