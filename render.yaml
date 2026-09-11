@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: healthos-v2-api
+    runtime: python
+    region: singapore
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: pip install -r backend/health_api/requirements.txt && python -m playwright install chromium
+    startCommand: uvicorn health_api.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8000}
+    healthCheckPath: /health
