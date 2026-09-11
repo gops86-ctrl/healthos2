@@ -6,6 +6,7 @@ import com.healthos.app.domain.model.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.util.Calendar
 
 class MyFitnessPalSyncImporter(
     private val client: MyFitnessPalSyncClient,
@@ -56,6 +57,21 @@ class MyFitnessPalSyncImporter(
             entries.forEachIndexed { index, _ ->
                 onProgress(Progress((index + 1) * 100 / entries.size.coerceAtLeast(1), index + 1, entries.size, "Storing MyFitnessPal nutrition…"))
             }
+
+            // A live MFP sync is authoritative for the dates it covers. Remove any
+            // existing MFP entries in that window first, including CSV-imported rows,
+            // so the same day's CSV + live data cannot be double-counted.
+            val calendar = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                add(Calendar.DAY_OF_YEAR, -(days - 1))
+            }
+            val startMillis = calendar.timeInMillis
+            calendar.add(Calendar.DAY_OF_YEAR, days)
+            val endMillis = calendar.timeInMillis
+            nutritionEntryDao.deleteBySourceAndDateRange(DataSource.MYFITNESSPAL.name, startMillis, endMillis)
             nutritionEntryDao.insertAll(entries)
             Result(entries.size, skipped)
         } catch (e: Exception) {
