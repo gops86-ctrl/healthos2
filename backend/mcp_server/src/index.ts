@@ -1,4 +1,3 @@
-```ts
 import { createServer } from 'node:http';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
