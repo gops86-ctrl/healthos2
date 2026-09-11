@@ -86,8 +86,10 @@ def _refresh_client(
 
     with _REFRESH_LOCK:
         try:
-            if not refresh.profile_seeded():
-                refresh.seed_profile(seed_cookies)
+            # Always reseed from the current candidate. This matters after a
+            # Render restart when Redis may contain a stale session but the
+            # bootstrap MFP_COOKIE is newer.
+            refresh.seed_profile(seed_cookies)
             refresh.refresh_session()
         except Exception as exc:
             message = str(exc).lower()
