@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from datetime import date, datetime, time, timedelta, timezone
@@ -16,6 +17,7 @@ DEFAULT_IMPERSONATE = "chrome"
 _REFRESH_LOCK = threading.Lock()
 MFP_URL = "https://www.myfitnesspal.com/"
 SETTLE_MS = 4000
+LOGGER = logging.getLogger(__name__)
 
 
 def _local_saved_cookies() -> dict[str, str] | None:
@@ -42,11 +44,13 @@ def _bootstrap_cookies() -> dict[str, str] | None:
 
 
 def _cookie_candidates() -> list[dict[str, str]]:
-    """Return persistent, local, and bootstrap sessions without exposing them.
+    """Return the durable session first, with Render MFP_COOKIE as bootstrap/recovery.
 
-    If the Render MFP_COOKIE was replaced, prefer that newly configured
-    bootstrap session over a stale Redis/local session. Otherwise keep the
-    persisted refreshed session first so automatic refresh remains durable.
+    Redis is the durable source across Render restarts. The Render environment
+    cookie is retained as a bootstrap credential and is also allowed to take
+    precedence when its session token was explicitly replaced, so a user can
+    recover from a fully invalidated Redis session without manually clearing
+    Redis first.
     """
     persistent = load_mfp_session()
     local = _local_saved_cookies()
@@ -54,6 +58,8 @@ def _cookie_candidates() -> list[dict[str, str]]:
 
     candidates: list[dict[str, str]] = []
     sources = (persistent, local, bootstrap)
+    source_name = "redis" if persistent else "local" if local else "bootstrap" if bootstrap else "none"
+
     if bootstrap:
         bootstrap_session = bootstrap.get(auth.SESSION_COOKIE)
         persisted_sessions = {
@@ -63,6 +69,7 @@ def _cookie_candidates() -> list[dict[str, str]]:
         }
         if bootstrap_session and bootstrap_session not in persisted_sessions:
             sources = (bootstrap, persistent, local)
+            source_name = "bootstrap_override"
 
     for cookies in sources:
         if not cookies:
@@ -70,6 +77,8 @@ def _cookie_candidates() -> list[dict[str, str]]:
         normalized = {str(key): str(value) for key, value in cookies.items()}
         if normalized not in candidates:
             candidates.append(normalized)
+
+    LOGGER.info("MFP session candidate source: %s", source_name)
     return candidates
 
 
@@ -108,13 +117,7 @@ def _source_record_id(day: date, meal: str | None, name: str, index: int) -> str
 
 
 def _persist_client_session(client: mfp_client.CurlCffiClient) -> dict[str, str] | None:
-    """Persist cookies actually observed by the live MFP HTTP session.
-
-    MyFitnessPal can rotate its NextAuth session cookie while a diary request
-    is being made. The curl_cffi session owns the updated cookie jar, so use it
-    as the source of truth instead of trying to infer rotation from the
-    bootstrap cookie or a second browser visit.
-    """
+    """Persist cookies actually observed by the live MFP HTTP session."""
     try:
         cookies = client.session.cookies.get_dict()
     except Exception:
@@ -127,22 +130,14 @@ def _persist_client_session(client: mfp_client.CurlCffiClient) -> dict[str, str]
     try:
         auth.save_cookies(normalized)
         save_mfp_session(normalized)
+        LOGGER.info("Persisted active MFP session to durable storage")
     except Exception:
-        # A successful MFP sync should not fail just because persistence is
-        # temporarily unavailable; the in-memory client remains usable.
-        pass
+        LOGGER.warning("Could not persist active MFP session", exc_info=True)
     return normalized
 
 
 def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
-    """Visit MFP with the session cookie and harvest rotated cookies.
-
-    We intentionally seed only MFP's authenticated session cookie. A copied
-    browser Cookie header can contain auxiliary cookies with attributes or
-    names that Chromium rejects through Storage.setCookies; those cookies are
-    not required to establish the NextAuth session and can make the refresh
-    fail before the page is even visited.
-    """
+    """Visit MFP with the session cookie and harvest rotated cookies."""
     if not refresh.available():
         raise RuntimeError("MyFitnessPal automatic refresh is unavailable")
 
@@ -164,13 +159,7 @@ def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
         )
         try:
             context.add_cookies(
-                [
-                    {
-                        "name": auth.SESSION_COOKIE,
-                        "value": session_value,
-                        "url": MFP_URL,
-                    }
-                ]
+                [{"name": auth.SESSION_COOKIE, "value": session_value, "url": MFP_URL}]
             )
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(MFP_URL, wait_until="domcontentloaded", timeout=30000)
@@ -208,6 +197,7 @@ def _refresh_client(
 
         auth.save_cookies(cookies)
         save_mfp_session(cookies)
+        LOGGER.info("Persisted refreshed MFP session to durable storage")
         mfp_client.reset()
         return mfp_client.build_client(cookies, username=username, impersonate=impersonate)
 
@@ -244,7 +234,7 @@ def _best_effort_session_touch(
     try:
         _refresh_client(cookies, username, impersonate)
     except Exception:
-        pass
+        LOGGER.info("Best-effort MFP session refresh did not rotate the session")
 
 
 def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
