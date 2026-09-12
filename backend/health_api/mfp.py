@@ -107,6 +107,33 @@ def _source_record_id(day: date, meal: str | None, name: str, index: int) -> str
     return f"mfp-{day.isoformat()}-{digest}"
 
 
+def _persist_client_session(client: mfp_client.CurlCffiClient) -> dict[str, str] | None:
+    """Persist cookies actually observed by the live MFP HTTP session.
+
+    MyFitnessPal can rotate its NextAuth session cookie while a diary request
+    is being made. The curl_cffi session owns the updated cookie jar, so use it
+    as the source of truth instead of trying to infer rotation from the
+    bootstrap cookie or a second browser visit.
+    """
+    try:
+        cookies = client.session.cookies.get_dict()
+    except Exception:
+        return None
+    if not isinstance(cookies, dict):
+        return None
+    normalized = {str(key): str(value) for key, value in cookies.items()}
+    if not normalized.get(auth.SESSION_COOKIE):
+        return None
+    try:
+        auth.save_cookies(normalized)
+        save_mfp_session(normalized)
+    except Exception:
+        # A successful MFP sync should not fail just because persistence is
+        # temporarily unavailable; the in-memory client remains usable.
+        pass
+    return normalized
+
+
 def _browser_refresh(seed_cookies: dict[str, str]) -> dict[str, str]:
     """Visit MFP with the session cookie and harvest rotated cookies.
 
@@ -241,6 +268,9 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
         day = start + timedelta(days=offset)
         try:
             mfp_day = client.get_date(day)
+            persisted = _persist_client_session(client)
+            if persisted:
+                active_cookies = persisted
         except Exception as exc:
             if refreshed:
                 raise RuntimeError(f"MyFitnessPal diary fetch failed for {day}: {exc}") from exc
@@ -254,6 +284,9 @@ def fetch_recent_nutrition(days: int) -> list[dict[str, Any]]:
                         client = _refresh_client(cookies, username, impersonate)
                         active_cookies = cookies
                         mfp_day = client.get_date(day)
+                        persisted = _persist_client_session(client)
+                        if persisted:
+                            active_cookies = persisted
                         refreshed = True
                         break
                     except Exception as refresh_error:
